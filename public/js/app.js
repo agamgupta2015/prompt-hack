@@ -1,9 +1,27 @@
+/*
+  === PRODUCTION SECURITY PATTERN FOR GEMINI API KEY ===
+  In a production environment, never expose the Gemini API key in the client.
+  Instead:
+  1. Store the GEMINI_API_KEY in Google Cloud Secret Manager.
+  2. Create a Firebase Cloud Function (e.g., `processSignal`).
+  3. The Cloud Function accesses the secret at runtime.
+  4. The client app calls the Firebase Cloud Function, which proxies the request to the Gemini API.
+  5. The Cloud Function enforces Firebase App Check to ensure requests only come from your app.
+
+  === GA4 MEASUREMENT PLAN ===
+  Events tracked:
+  - signal_submitted (params: input_type, input_length) -> Fired when user clicks "Process Signal"
+  - incident_parsed (params: severity, incident_type, confidence_score) -> Fired when Gemini returns successfully
+  - action_exported -> Fired when user clicks "Export JSON"
+  - preset_loaded (params: preset_name) -> Fired when a preset is used
+*/
+
 import {
   extractAndParseJSON,
   validateSchema,
   generateIncidentId,
 } from './utils.js';
-import { getApiKey, saveApiKey, saveToHistory, getHistory } from './storage.js';
+import { getApiKey, saveApiKey } from './storage.js';
 import { processSignalToGemini } from './api.js';
 import {
   showToast,
@@ -19,6 +37,37 @@ import {
   stopRecording,
   isSpeechRecording,
 } from './audio.js';
+
+/* Firebase Initialization */
+const firebaseConfig = {
+  apiKey: "YOUR_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID",
+  measurementId: "G-XXXXXXXXXX"
+};
+
+// Initialize Firebase SDK
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const auth = firebase.auth();
+
+/*
+  Firestore Security Rules required for this app:
+  rules_version = '2';
+  service cloud.firestore {
+    match /databases/{database}/documents {
+      match /incidents/{incidentId} {
+        allow read, write: if request.auth != null
+          && request.auth.uid == resource.data.uid;
+        allow create: if request.auth != null
+          && request.resource.data.uid == request.auth.uid;
+      }
+    }
+  }
+*/
 
 /* State */
 let currentActiveTabId = 'tab-text';
@@ -53,8 +102,47 @@ function init() {
     keyStatusContainer.style.color = 'var(--c-accent-green)';
   }
 
-  // Pre-render history
-  renderHistory(getHistory());
+  // Firebase Auth & Real-time History Listener
+  auth.onAuthStateChanged((user) => {
+    const sessionIndicator = document.getElementById('sessionIndicator');
+    if (user) {
+      if (sessionIndicator) {
+        sessionIndicator.classList.remove('offline');
+        sessionIndicator.classList.add('online');
+        sessionIndicator.title = 'Session Online';
+      }
+
+      // Setup Firestore Real-time listener for History
+      db.collection("incidents")
+        .where("uid", "==", user.uid)
+        .orderBy("created_at", "desc")
+        .limit(10)
+        .onSnapshot((snapshot) => {
+          const historyArray = [];
+          snapshot.forEach(doc => {
+            historyArray.push({
+              id: doc.id,
+              timestamp: doc.data().created_at ? doc.data().created_at.toMillis() : Date.now(),
+              data: doc.data()
+            });
+          });
+          renderHistory(historyArray);
+        }, (err) => {
+          console.error("Firestore history listener error:", err);
+        });
+    } else {
+      if (sessionIndicator) {
+        sessionIndicator.classList.remove('online');
+        sessionIndicator.classList.add('offline');
+        sessionIndicator.title = 'Session Offline';
+      }
+    }
+  });
+
+  // Anonymous login on app load
+  auth.signInAnonymously().catch(err => {
+    console.warn("Auth init failed. Maybe offline:", err);
+  });
 }
 
 /* API Key Management */
@@ -105,6 +193,13 @@ document.querySelectorAll('.btn-preset').forEach((btn) => {
   btn.addEventListener('click', (e) => {
     const key = e.target.getAttribute('data-preset');
     const text = SCENARIOS[key];
+
+    // GA4 Tracking
+    if (typeof gtag !== 'undefined') {
+      gtag('event', 'preset_loaded', {
+        preset_name: key
+      });
+    }
 
     // Switch to text tab if not on paste
     if (key === 'cyclone') {
@@ -228,6 +323,14 @@ processBtn.addEventListener('click', async () => {
     return;
   }
 
+  // GA4 Tracking
+  if (typeof gtag !== 'undefined') {
+    gtag('event', 'signal_submitted', {
+      input_type: currentActiveTabId,
+      input_length: inputPayload.text ? inputPayload.text.length : 0
+    });
+  }
+
   // Disabling interactions
   processBtn.disabled = true;
   document.getElementById('outputPanel').classList.add('hidden');
@@ -269,15 +372,30 @@ processBtn.addEventListener('click', async () => {
 
     renderOutputCard(parsedJSON, incidentId, timestamp);
 
-    // 5. Commit to history
-    saveToHistory({
-      id: incidentId,
-      timestamp: timestamp,
-      data: parsedJSON,
-    });
+    // 5. Commit to Firestore
+    if (auth.currentUser) {
+      try {
+        await db.collection("incidents").doc(incidentId).set({
+          ...parsedJSON,
+          uid: auth.currentUser.uid,
+          created_at: firebase.firestore.FieldValue.serverTimestamp(),
+          input_type: currentActiveTabId,
+          raw_input_length: inputPayload.text ? inputPayload.text.length : 0
+        });
+      } catch (err) {
+        showToast('Firestore offline — incident saved locally', 'error');
+        console.error("Firestore write failed", err);
+      }
+    }
 
-    // Re-render drawer silently
-    renderHistory(getHistory());
+    // GA4 Tracking
+    if (typeof gtag !== 'undefined') {
+      gtag('event', 'incident_parsed', {
+        severity: parsedJSON.severity,
+        incident_type: parsedJSON.incident_type,
+        confidence_score: parsedJSON.confidence_score
+      });
+    }
 
     showToast('Signal processed successfully.', 'info');
   } catch (error) {
@@ -291,6 +409,12 @@ processBtn.addEventListener('click', async () => {
 /* Actions (Export, Copy) */
 document.getElementById('exportJsonBtn').addEventListener('click', () => {
   if (!currentIncidentData) return;
+
+  // GA4 Tracking
+  if (typeof gtag !== 'undefined') {
+    gtag('event', 'action_exported');
+  }
+
   const str = JSON.stringify(currentIncidentData, null, 2);
   const blob = new Blob([str], { type: 'application/json' });
   const url = URL.createObjectURL(blob);

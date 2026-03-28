@@ -84,6 +84,33 @@ export function renderOutputCard(data, incidentId, timestamp) {
     }
   });
 
+  // Google Maps Embed API Integration
+  const entitiesGrid = document.querySelector('.entities-grid');
+  let mapContainer = document.getElementById('mapContainer');
+  if (!mapContainer) {
+    mapContainer = createElement('div');
+    mapContainer.id = 'mapContainer';
+    entitiesGrid.appendChild(mapContainer);
+  }
+  mapContainer.innerHTML = '';
+
+  if (data.entities && data.entities.locations && data.entities.locations.length > 0) {
+    const q = encodeURIComponent(data.entities.locations[0]);
+    // The Google Maps API key must be HTTP-referrer restricted in Google Cloud Console
+    mapContainer.innerHTML = `
+      <h4>Location Context</h4>
+      <iframe
+        width="100%"
+        height="250"
+        style="border: 1px solid var(--c-border); border-radius: var(--radius-sm); margin-top: var(--space-xs); display: block;"
+        loading="lazy"
+        allowfullscreen
+        referrerpolicy="no-referrer-when-downgrade"
+        src="https://www.google.com/maps/embed/v1/place?key=YOUR_MAPS_API_KEY&q=${q}">
+      </iframe>
+    `;
+  }
+
   // 4. Verification Facts & Claims
   const factsList = document.getElementById('verifiedFacts');
   factsList.innerHTML = '';
