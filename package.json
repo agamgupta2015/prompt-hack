@@ -1,0 +1,16 @@
+{
+  "name": "aria-universal-bridge",
+  "version": "1.0.0",
+  "description": "ARIA — Universal Bridge emergency intelligence parsing system",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test tests/",
+    "lint": "eslint public/js/**/*.js tests/**/*.js",
+    "format": "prettier --write public/**/*.{js,css,html}"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0"
+  }
+}
