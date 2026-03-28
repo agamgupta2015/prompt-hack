@@ -1,229 +1,262 @@
-/* ── UI ── */
+/**
+ * DOM manipulation and View presentation
+ */
 
 /**
- * Safely creates an isolated DOM element.
- * @param {string} tag - Tag name
- * @param {string[]} classes - Array of class names
- * @param {string} text - Safe text content
- * @returns {HTMLElement} Built element
+ * Creates an element with optional classes and text content
  */
-export function createElement(tag, classes = [], text = '') {
+function createElement(tag, classes = [], textContent = '') {
   const el = document.createElement(tag);
-  if (classes.length) el.classList.add(...classes);
-  if (text) el.textContent = text;
+  if (classes.length) {
+    el.classList.add(...classes);
+  }
+  if (textContent) {
+    el.textContent = textContent;
+  }
   return el;
 }
 
 /**
- * Renders an inline error banner replacing floating toasts.
- * @param {string} message - Error description
- * @param {string} type - 'error' or 'info'
+ * Updates an element's text content securely
  */
-export function showInlineBanner(message, type = 'error') {
-  const banner = document.getElementById('errorBanner');
-  if (!banner) return;
-  banner.textContent = message;
-  banner.className = `error-banner ${type === 'info' ? 'info' : 'error'}`;
-  banner.classList.remove('hidden');
-  setTimeout(() => banner.classList.add('hidden'), 5000);
+function setContentSecure(elementId, content) {
+  const el = document.getElementById(elementId);
+  if (el) el.textContent = content || '';
 }
 
 /**
- * Controls the animated processing rings.
- * @param {string} msg - Step description
+ * Show a toast message to the user
  */
-export function updateProcessingState(msg) {
-  const panel = document.getElementById('processingState');
-  const logs = document.getElementById('processingLogs');
-  if (!panel || !logs) return;
-  panel.classList.remove('hidden');
-  logs.appendChild(createElement('div', ['log-line'], `> ${msg}`));
-  logs.scrollTop = logs.scrollHeight;
-  if (logs.children.length > 5) logs.removeChild(logs.firstChild);
+export function showToast(message, type = 'error') {
+  const toast = document.getElementById('toast');
+  toast.textContent = message;
+  toast.className = `toast ${type === 'info' ? 'info' : ''}`;
+  toast.classList.remove('hidden');
+
+  setTimeout(() => {
+    toast.classList.add('hidden');
+  }, 4000);
 }
 
 /**
- * Resets the loading interface.
+ * Render the entire output card
  */
-export function clearProcessingLogs() {
-  const panel = document.getElementById('processingState');
-  const logs = document.getElementById('processingLogs');
-  if (panel) panel.classList.add('hidden');
-  if (logs) logs.innerHTML = '';
-}
-
-/**
- * Renders the Intelligence Card payload.
- * @param {Object} data - Processed AST
- * @param {string} id - Hash
- * @param {number} ts - Epoch timestamp
- */
-export function renderOutputCard(data, id, ts) {
-  clearProcessingLogs();
+export function renderOutputCard(data, incidentId, timestamp) {
+  // Hide processed state and show output panel in "reset" state first
+  document.getElementById('processingState').classList.add('hidden');
   const panel = document.getElementById('outputPanel');
+
+  // Re-trigger CSS animations by removing and adding class
   panel.classList.add('hidden');
-  void panel.offsetWidth; // Reflow
+  // force reflow
+  void panel.offsetWidth;
   panel.classList.remove('hidden');
 
-  renderCardMeta(data, id, ts);
-  renderEntities(data);
-  renderVerifications(data);
-  renderActionQueue(data);
-}
-
-/**
- * Binds AST metadata to DOM skeleton.
- * @param {Object} data - AST
- * @param {string} id - Hash
- * @param {number} ts - Epoch
- */
-function renderCardMeta(data, id, ts) {
+  // 1. Header & Meta
   const badge = document.getElementById('severityBadge');
   badge.className = `badge-severity severity-${data.severity}`;
-  badge.innerHTML = `<span>${data.severity}</span>`;
+  const badgeSpan = badge.querySelector('span');
+  if (badgeSpan) badgeSpan.textContent = data.severity;
+  else badge.innerHTML = `<span>${data.severity}</span>`;
 
-  document.getElementById('incidentTitle').textContent = data.incident_title;
-  document.getElementById('incidentType').textContent = data.incident_type;
-  document.getElementById('incidentId').textContent = id;
-  document.getElementById('timestamp').textContent = new Date(ts).toLocaleTimeString();
-  document.getElementById('plainSummary').textContent = data.plain_english_summary;
-}
+  setContentSecure('incidentTitle', data.incident_title);
+  setContentSecure('incidentType', data.incident_type);
+  setContentSecure('incidentId', incidentId);
+  setContentSecure('timestamp', new Date(timestamp).toLocaleTimeString());
 
-/**
- * Fragments and attaches extracted entities.
- * @param {Object} data - AST
- */
-function renderEntities(data) {
-  const list = document.getElementById('entitiesList');
-  const frag = document.createDocumentFragment();
-  list.innerHTML = '';
-  
-  Object.entries(data.entities || {}).forEach(([cat, items]) => {
+  // 2. Summary
+  setContentSecure('plainSummary', data.plain_english_summary);
+
+  // 3. Entities
+  const entitiesList = document.getElementById('entitiesList');
+  entitiesList.innerHTML = '';
+  Object.entries(data.entities || {}).forEach(([category, items]) => {
     if (Array.isArray(items)) {
-      items.forEach(i => frag.appendChild(createElement('span', ['tag', `tag-${cat}`], `${cat}: ${i}`)));
+      items.forEach((item) => {
+        entitiesList.appendChild(
+          createElement(
+            'span',
+            ['tag', `tag-${category}`],
+            `${category}: ${item}`
+          )
+        );
+      });
     }
   });
-  list.appendChild(frag);
-  renderMaps(data);
-}
 
-/**
- * Attaches Google Maps Iframe if locations exist.
- * @param {Object} data - AST
- */
-function renderMaps(data) {
-  let mapC = document.getElementById('mapContainer');
-  if (!mapC) {
-    mapC = createElement('div');
-    mapC.id = 'mapContainer';
-    document.querySelector('.entities-grid').appendChild(mapC);
+  // Google Maps Embed API Integration
+  const entitiesGrid = document.querySelector('.entities-grid');
+  let mapContainer = document.getElementById('mapContainer');
+  if (!mapContainer) {
+    mapContainer = createElement('div');
+    mapContainer.id = 'mapContainer';
+    entitiesGrid.appendChild(mapContainer);
   }
-  mapC.innerHTML = '';
-  if (data.entities?.locations?.length > 0) {
+  mapContainer.innerHTML = '';
+
+  if (data.entities && data.entities.locations && data.entities.locations.length > 0) {
     const q = encodeURIComponent(data.entities.locations[0]);
-    mapC.innerHTML = `<h4>Location</h4><iframe width="100%" height="250" loading="lazy" src="https://www.google.com/maps/embed/v1/place?key=YOUR_MAPS_API_KEY&q=${q}"></iframe>`;
+    // The Google Maps API key must be HTTP-referrer restricted in Google Cloud Console
+    mapContainer.innerHTML = `
+      <h4>Location Context</h4>
+      <iframe
+        width="100%"
+        height="250"
+        style="border: 1px solid var(--c-border); border-radius: var(--radius-sm); margin-top: var(--space-xs); display: block;"
+        loading="lazy"
+        allowfullscreen
+        referrerpolicy="no-referrer-when-downgrade"
+        src="https://www.google.com/maps/embed/v1/place?key=YOUR_MAPS_API_KEY&q=${q}">
+      </iframe>
+    `;
+  }
+
+  // 4. Verification Facts & Claims
+  const factsList = document.getElementById('verifiedFacts');
+  factsList.innerHTML = '';
+  (data.verified_facts || []).forEach((f) => {
+    const li = createElement('li');
+    const content = createElement('div', ['fact-content']);
+    content.innerHTML = `<span class="icon-fact">✓</span><span>${f.fact}</span>`;
+
+    const confBar = createElement('div', ['confidence-bar']);
+    const confFill = createElement('div', ['confidence-fill']);
+    confFill.style.width = `${f.confidence * 100}%`;
+    confBar.appendChild(confFill);
+
+    li.appendChild(content);
+    li.appendChild(confBar);
+    factsList.appendChild(li);
+  });
+
+  const claimsList = document.getElementById('unverifiedClaims');
+  claimsList.innerHTML = '';
+  (data.unverified_claims || []).forEach((c) => {
+    const li = createElement('li');
+    const content = createElement('div', ['fact-content']);
+    content.innerHTML = `<span class="icon-claim">~</span><span>${c.claim}</span>`;
+
+    const confBar = createElement('div', ['confidence-bar']);
+    const confFill = createElement('div', ['confidence-fill']);
+    confFill.style.width = `${c.confidence * 100}%`;
+    confFill.style.background = 'var(--c-accent-amber)';
+    confBar.appendChild(confFill);
+
+    li.appendChild(content);
+    li.appendChild(confBar);
+    claimsList.appendChild(li);
+  });
+
+  // 5. Action Queue
+  const queue = document.getElementById('actionQueue');
+  queue.innerHTML = '';
+  // Sort by priority just in case
+  const actions = [...(data.action_queue || [])].sort(
+    (a, b) => a.priority - b.priority
+  );
+  actions.forEach((a) => {
+    const li = createElement('li', [`action-urgency-${a.urgency}`]);
+    const p = createElement('p', [], a.action);
+    const meta = createElement('div', ['action-meta']);
+    meta.innerHTML = `<span>Owner: ${a.owner}</span> | <span>Urgency: ${a.urgency}</span> | <span>ETA: ${a.eta_minutes} min</span>`;
+    li.appendChild(p);
+    li.appendChild(meta);
+    queue.appendChild(li);
+  });
+
+  // 6. Notify
+  const notifyList = document.getElementById('notifyList');
+  notifyList.innerHTML = '';
+  (data.notify || []).forEach((n) => {
+    const li = createElement('li');
+    const entity = createElement('span', ['notify-entity'], n.entity);
+    const meta = createElement(
+      'span',
+      ['notify-meta'],
+      `Method: ${n.method} | Urgency: ${n.urgency}`
+    );
+    li.appendChild(entity);
+    li.appendChild(meta);
+    notifyList.appendChild(li);
+  });
+
+  // 7. Auto Tags
+  const autoTagsElem = document.getElementById('autoTags');
+  autoTagsElem.innerHTML = '';
+  (data.auto_tags || []).forEach((t) => {
+    autoTagsElem.appendChild(
+      createElement('span', ['code-text'], `#${t.replace(/\s+/g, '_')} `)
+    );
+  });
+}
+
+/**
+ * Updates the processing state rings and logs
+ */
+export function updateProcessingState(logMessage) {
+  const panel = document.getElementById('processingState');
+  panel.classList.remove('hidden');
+
+  const logsContainer = document.getElementById('processingLogs');
+  const line = createElement('div', ['log-line'], `> ${logMessage}`);
+  logsContainer.appendChild(line);
+
+  // Scroll to bottom of logs
+  logsContainer.scrollTop = logsContainer.scrollHeight;
+  if (logsContainer.children.length > 5) {
+    logsContainer.removeChild(logsContainer.firstChild); // Keep it clean
   }
 }
 
-/**
- * Fragments verification arrays.
- * @param {Object} data - AST
- */
-function renderVerifications(data) {
-  const factList = document.getElementById('verifiedFacts');
-  const claimList = document.getElementById('unverifiedClaims');
-  factList.innerHTML = ''; claimList.innerHTML = '';
-  
-  const fFrag = document.createDocumentFragment();
-  (data.verified_facts || []).forEach(f => fFrag.appendChild(buildConfListItem(f.fact, f.confidence, false)));
-  factList.appendChild(fFrag);
-
-  const cFrag = document.createDocumentFragment();
-  (data.unverified_claims || []).forEach(c => cFrag.appendChild(buildConfListItem(c.claim, c.confidence, true)));
-  claimList.appendChild(cFrag);
+export function clearProcessingLogs() {
+  document.getElementById('processingLogs').innerHTML = '';
+  document.getElementById('processingState').classList.add('hidden');
 }
 
 /**
- * Constructs a confidence bar element block.
- * @param {string} text - Claim/Fact text
- * @param {number} conf - Float rating
- * @param {boolean} isClaim - Amber vs Green style
- * @returns {HTMLElement} Built list item
+ * Renders the History Drawer List
  */
-function buildConfListItem(text, conf, isClaim) {
-  const li = createElement('li');
-  const c = createElement('div', ['fact-content']);
-  c.innerHTML = `<span>${isClaim ? '~' : '✓'}</span><span>${text}</span>`;
-  const b = createElement('div', ['confidence-bar']);
-  const f = createElement('div', ['confidence-fill']);
-  f.style.width = `${conf * 100}%`;
-  if (isClaim) f.style.background = 'var(--c-accent-amber)';
-  b.appendChild(f);
-  li.appendChild(c); li.appendChild(b);
-  return li;
-}
-
-/**
- * Fragments Action Queue.
- * @param {Object} data - AST
- */
-function renderActionQueue(data) {
-  const q = document.getElementById('actionQueue');
-  const frag = document.createDocumentFragment();
-  q.innerHTML = '';
-
-  const actions = [...(data.action_queue || [])].sort((a, b) => a.priority - b.priority);
-  actions.forEach(a => {
-    const li = createElement('li', [`action-urgency-${a.urgency}`]);
-    li.appendChild(createElement('p', [], a.action));
-    const m = createElement('div', ['action-meta']);
-    m.innerHTML = `<span>${a.owner}</span> | <span>${a.urgency}</span> | <span>${a.eta_minutes}m</span>`;
-    li.appendChild(m);
-    frag.appendChild(li);
-  });
-  q.appendChild(frag);
-  renderNotifyList(data);
-}
-
-/**
- * Fragments Notification and Tag blocks.
- * @param {Object} data - AST
- */
-function renderNotifyList(data) {
-  const nl = document.getElementById('notifyList');
-  const nf = document.createDocumentFragment();
-  nl.innerHTML = '';
-  (data.notify || []).forEach(n => {
-    const li = createElement('li');
-    li.appendChild(createElement('span', ['notify-entity'], n.entity));
-    li.appendChild(createElement('span', ['notify-meta'], `${n.method} | ${n.urgency}`));
-    nf.appendChild(li);
-  });
-  nl.appendChild(nf);
-
-  const at = document.getElementById('autoTags');
-  at.innerHTML = '';
-  const atf = document.createDocumentFragment();
-  (data.auto_tags || []).forEach(t => atf.appendChild(createElement('span', ['code-text'], `#${t.replace(/\s+/g,'_')} `)));
-  at.appendChild(atf);
-}
-
-/**
- * Fragments History Drawer synchronization.
- * @param {Array} history - Array of mapped AST datasets
- */
-export function renderHistory(history) {
+export function renderHistory(historyArray) {
   const list = document.getElementById('historyList');
-  if (!history.length) {
+  list.innerHTML = '';
+  if (historyArray.length === 0) {
     list.innerHTML = '<li class="code-text">No recorded incidents</li>';
     return;
   }
-  const frag = document.createDocumentFragment();
-  list.innerHTML = '';
-  history.forEach(item => {
+
+  historyArray.forEach((item) => {
     const li = createElement('li', ['history-item']);
-    li.innerHTML = `<div class="history-item-title">${item.data.incident_title}</div><div class="history-item-meta"><span>${item.data.severity}</span><span>${new Date(item.timestamp).toLocaleString()}</span></div>`;
-    frag.appendChild(li);
+    li.innerHTML = `
+      <div class="history-item-title">${item.data.incident_title}</div>
+      <div class="history-item-meta">
+        <span>${item.data.severity}</span>
+        <span>${new Date(item.timestamp).toLocaleString()}</span>
+      </div>
+    `;
+    list.appendChild(li);
   });
-  list.appendChild(frag);
+}
+
+/**
+ * Render Vision API detected labels dynamically above image drop zone
+ */
+export function renderVisionLabels(labels) {
+  let container = document.getElementById('visionTagsContainer');
+  if (!container) {
+    const dropZone = document.getElementById('dropZone');
+    container = createElement('div', ['tags-container']);
+    container.id = 'visionTagsContainer';
+    container.style.marginTop = 'var(--space-sm)';
+    container.style.marginBottom = 'var(--space-sm)';
+    dropZone.parentNode.insertBefore(container, dropZone);
+  }
+  container.innerHTML = '';
+  
+  if (!labels || labels.length === 0) return;
+  
+  labels.forEach(l => {
+    container.appendChild(
+      createElement('span', ['tag', 'tag-resources'], `👁️ ${l.description}`)
+    );
+  });
 }

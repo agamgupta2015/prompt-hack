@@ -138,34 +138,6 @@ header {
   box-shadow: 0 0 8px rgba(74, 200, 120, 0.4);
 }
 
-.error-banner {
-  width: 100%;
-  padding: var(--space-md);
-  margin-bottom: var(--space-lg);
-  border-radius: var(--radius-sm);
-  font-family: var(--f-mono);
-  font-size: 0.9rem;
-  font-weight: 500;
-  text-align: center;
-  transition: all 0.3s ease;
-}
-
-.error-banner.error {
-  background: rgba(224, 82, 82, 0.15);
-  color: var(--c-accent-red);
-  border: 1px solid var(--c-accent-red);
-}
-
-.error-banner.info {
-  background: rgba(74, 200, 120, 0.15);
-  color: var(--c-accent-green);
-  border: 1px solid var(--c-accent-green);
-}
-
-.error-banner.hidden {
-  display: none;
-}
-
 .config-bar {
   display: flex;
   align-items: center;

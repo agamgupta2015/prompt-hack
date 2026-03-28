@@ -298,11 +298,6 @@ textarea:focus {
   color: var(--c-accent-purple);
   border-color: var(--c-accent-purple);
 }
-.tag.vision-tag {
-  color: var(--c-text-muted);
-  border-color: var(--c-border-focus);
-  background: var(--c-bg-panel);
-}
 
 /* Lists (Facts/Claims, Queue) */
 .fact-list {
