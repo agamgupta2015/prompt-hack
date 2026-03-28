@@ -22,17 +22,82 @@ In real emergencies, information arrives messy. A caller is panicking. A weather
 
 ---
 
-## Live Demo
+## Live Demo Examples
 
+**Example 1 — Building Fire**
 ```
 Input:  "theres fire at the building near 5th and main smoke everywhere 
          people on 3rd floor electricity sparking one guy is down near door"
 
 Output: CRITICAL — Active Structure Fire
         → Call Fire Department (IMMEDIATE, 3 min)
-        → Dispatch Ambulance to Main & 5th (IMMEDIATE, 5 min)  
+        → Dispatch Ambulance to Main & 5th (IMMEDIATE, 5 min)
         → Notify Power Utility re: electrical hazard (URGENT, 10 min)
         → Evacuate floors 1–2 via stairwell B (IMMEDIATE)
+```
+
+---
+
+**Example 2 — Coastal Cyclone**
+```
+Input:  "cyclone forming in bay looks like its heading toward coast wind picking up 
+         fast fishermen still out at sea maybe 200 boats last signal 6hrs ago 
+         low lying villages not evacuated yet"
+
+Output: CRITICAL — Coastal Cyclone Imminent
+        → Deploy Coast Guard for 200 vessels (IMMEDIATE, 15 min)
+        → Trigger mass evacuation of coastal villages (IMMEDIATE, 20 min)
+        → Activate emergency broadcast on all channels (IMMEDIATE, 5 min)
+        → Open inland relief shelters capacity 10,000 (URGENT, 30 min)
+        → Notify State Disaster Management Authority (IMMEDIATE, 2 min)
+```
+
+---
+
+**Example 3 — Mass Food Poisoning**
+```
+Input:  "wedding food poisoning 200 guests vomiting and diarrhea started 2hrs after 
+         dinner 15 people unconscious 3 kids not responding venue is city banquet 
+         hall sector 4 local hospital says theyre full"
+
+Output: CRITICAL — Mass Food Poisoning Event
+        → Dispatch 8 ambulances to City Banquet Hall Sector 4 (IMMEDIATE, 7 min)
+        → Activate overflow protocol at Regional Medical Centre (IMMEDIATE, 5 min)
+        → Isolate and preserve all food samples for testing (URGENT, 10 min)
+        → Prioritise 3 unresponsive children for ICU (IMMEDIATE)
+        → Notify Food Safety Authority for investigation (URGENT, 20 min)
+```
+
+---
+
+**Example 4 — Highway Pile-Up**
+```
+Input:  "massive pile up on highway km 42 near manesar truck jackknifed blocking 
+         all 3 lanes fuel spill visible 2 cars crushed underneath people screaming 
+         ambulance cant get through 200 vehicles backed up"
+
+Output: HIGH — Multi-Vehicle Highway Collision
+        → Deploy highway patrol to clear vehicle corridor (IMMEDIATE, 10 min)
+        → Send fire unit for fuel spill containment (IMMEDIATE, 8 min)
+        → Dispatch trauma ambulances via service road (IMMEDIATE, 12 min)
+        → Issue highway diversion alert on NH48 (URGENT, 5 min)
+        → Notify nearest trauma centre to prepare casualty bay (URGENT, 10 min)
+```
+
+---
+
+**Example 5 — Flash Flood / Dam Release**
+```
+Input:  "dam gates opened upstream 14 of 20 gates heavy rain 380mm last 6 hours 
+         villages rampur and kherli in flood plain roads already cut off 1200 families 
+         mobile towers down cant reach anyone there"
+
+Output: CRITICAL — Flash Flood / Dam Release Emergency
+        → Deploy helicopter rescue to Rampur & Kherli (IMMEDIATE, 25 min)
+        → Send NDRF boat teams via last accessible road (IMMEDIATE, 30 min)
+        → Establish satellite communication with cut-off zones (URGENT, 20 min)
+        → Pre-position medical teams at flood boundary (URGENT, 40 min)
+        → Issue downstream flood warning for all villages (IMMEDIATE, 3 min)
 ```
 
 ---
