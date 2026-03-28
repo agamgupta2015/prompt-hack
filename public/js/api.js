@@ -1,61 +1,18 @@
-const GEMINI_API_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+/* ── GEMINI ── */
 
-const SYSTEM_PROMPT = `You are ARIA, an emergency intelligence parsing system. You receive messy, unstructured real-world input of any type — voice transcripts, weather data, traffic reports, field notes, social media posts, or mixed signals — and convert them into a precise, structured JSON action plan.
+const GEMINI_API_URL = 'https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/processSignal';
 
-Always respond with ONLY valid JSON in this exact schema:
-{
-  "severity": "CRITICAL|HIGH|MEDIUM|LOW",
-  "incident_title": "string (max 6 words)",
-  "incident_type": "string (e.g. Fire, Flood, Medical, Traffic, Infrastructure, Environmental, Civil)",
-  "confidence_score": number (0.0 to 1.0),
-  "entities": {
-    "people": ["string"],
-    "locations": ["string"],
-    "times": ["string"],
-    "resources_needed": ["string"],
-    "organisations": ["string"]
-  },
-  "verified_facts": [
-    { "fact": "string", "confidence": number }
-  ],
-  "unverified_claims": [
-    { "claim": "string", "confidence": number }
-  ],
-  "action_queue": [
-    {
-      "priority": number,
-      "action": "string",
-      "owner": "string (role, e.g. Fire Department, Hospital, Police)",
-      "urgency": "IMMEDIATE|URGENT|ROUTINE",
-      "eta_minutes": number
-    }
-  ],
-  "notify": [
-    {
-      "entity": "string",
-      "method": "string (Call|SMS|Radio|App)",
-      "urgency": "IMMEDIATE|URGENT|ROUTINE"
-    }
-  ],
-  "plain_english_summary": "string (2-3 sentences, jargon-free)",
-  "auto_tags": ["string"]
-}
-
-Never include any text outside the JSON. Be decisive. When uncertain, lower confidence score rather than omitting data.`;
+const SYS_PROMPT = `You are ARIA. Convert unstructured data to structured JSON matching the defined schema exactly. Never include text outside the JSON.`;
 
 /**
- * Builds the payload for the Gemini API call based on whether the input is text or image.
+ * Constructs the core instruction payload for the LLM.
+ * @param {Object} inputData - Structured dictionary of text/image
+ * @returns {Object} JSON strict payload
  */
-function buildPayload(inputData) {
+export function buildGeminiPayload(inputData) {
   const parts = [];
-
-  if (inputData.text) {
-    parts.push({ text: inputData.text });
-  }
-
+  if (inputData.text) parts.push({ text: inputData.text });
   if (inputData.image) {
-    // image format: { mimeType: "image/jpeg", data: "base64..." }
     parts.push({
       inlineData: {
         mimeType: inputData.image.mimeType,
@@ -65,57 +22,115 @@ function buildPayload(inputData) {
   }
 
   return {
-    systemInstruction: {
-      parts: [{ text: SYSTEM_PROMPT }],
-    },
-    contents: [
-      {
-        parts: parts,
-      },
-    ],
-    generationConfig: {
-      temperature: 0.1, // Strict precision
-      responseMimeType: 'application/json',
-    },
+    systemInstruction: { parts: [{ text: SYS_PROMPT }] },
+    contents: [{ parts }],
+    generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
   };
 }
 
 /**
- * Initiates the request to the Gemini API.
- * @param {Object} inputData - { text: string, image: { mimeType, data } }
- * @param {string} apiKey
- * @returns {Promise<string>} raw response text
+ * Handles explicit HTTP error ranges and formats responses.
+ * @param {Response} response - Fetch response object
+ * @throws {Error} specific HTTP network errors
+ */
+export async function handleHttpError(response) {
+  if (response.status === 400) throw new Error('HTTP 400: Malformed Request.');
+  if (response.status === 401) throw new Error('HTTP 401: Unauthorized API Key.');
+  if (response.status === 403) throw new Error('HTTP 403: Forbidden access.');
+  if (response.status === 429) throw new Error('HTTP 429: Rate limit hit, retry in 30s.');
+  if (response.status >= 500) throw new Error('HTTP 500: Google Cloud server failure.');
+  throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+}
+
+/**
+ * Safely executes the API proxy block and checks network health.
+ * @param {string} url - Target fetch URL
+ * @param {Object} payload - Body dictionary
+ * @returns {Response} Raw response object
+ * @throws {Error} if network is physically inaccessible
+ */
+export async function executeFetch(url, payload) {
+  try {
+    return await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (netErr) {
+    throw new Error('NETWORK_FAILURE: Unable to reach Google Services. Check connection.');
+  }
+}
+
+/**
+ * Orchestrates the Gemini REST API proxy interaction.
+ * @param {Object} inputData - { text, image }
+ * @param {string} apiKey - Target key (passed or proxied)
+ * @returns {Promise<string>} The raw markdown string
+ * @throws {Error} For HTTP, Network, or Parse faults
  */
 export async function processSignalToGemini(inputData, apiKey) {
-  if (!apiKey) {
-    throw new Error('API Key is missing. Please save it in the header.');
+  if (!apiKey) throw new Error('API Key is missing from Config.');
+  const payload = buildGeminiPayload(inputData);
+  
+  const response = await executeFetch(GEMINI_API_URL, payload);
+  if (!response.ok) await handleHttpError(response);
+  
+  let data;
+  try {
+    data = await response.json();
+  } catch (err) {
+    throw new Error('Parse error: Cloud returned invalid JSON boundary.');
   }
 
-  const payload = buildPayload(inputData);
-
-  const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    if (response.status === 400)
-      throw new Error('Bad Request: Invalid format or API Key format.');
-    if (response.status === 401)
-      throw new Error('Unauthorized: Invalid API Key.');
-    if (response.status === 429)
-      throw new Error('Rate Limit Exceeded: Quota reached.');
-    throw new Error(`API Error: ${response.status} ${response.statusText}`);
+  if (!data.candidates || !data.candidates.length) {
+    throw new Error('API Error: No textual candidates returned from Gemini.');
   }
-
-  const data = await response.json();
-
-  if (!data.candidates || data.candidates.length === 0) {
-    throw new Error('No candidates returned from Gemini LLM.');
-  }
-
   return data.candidates[0].content.parts[0].text;
+}
+
+/* ── VISION ── */
+
+/**
+ * Formats the strict Google Vision API payload block.
+ * @param {string} b64 - Base64 encoded byte map
+ * @returns {Object} Vision REST format
+ */
+export function buildVisionPayload(b64) {
+  return {
+    requests: [
+      {
+        image: { content: b64 },
+        features: [
+          { type: 'LABEL_DETECTION', maxResults: 10 },
+          { type: 'TEXT_DETECTION' },
+          { type: 'OBJECT_LOCALIZATION' }
+        ]
+      }
+    ]
+  };
+}
+
+/**
+ * Fires request to Cloud Vision to interpret imagery autonomously.
+ * @param {string} base64Image - Encoded map
+ * @param {string} apiKey - API Key
+ * @returns {Promise<Object>} Single response JSON node
+ * @throws {Error} Explicit networking errors
+ */
+export async function processSignalToVisionAPI(base64Image, apiKey) {
+  if (!apiKey) throw new Error('API Key required for ML Vision.');
+  const payload = buildVisionPayload(base64Image);
+  const url = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`;
+  
+  const response = await executeFetch(url, payload);
+  if (!response.ok) await handleHttpError(response);
+
+  let data;
+  try { data = await response.json(); } 
+  catch (e) { throw new Error('Vision error: corrupted JSON chunk.'); }
+
+  if (!data.responses || !data.responses.length) {
+    throw new Error('Vision Error: API returned empty analysis block.');
+  }
+  return data.responses[0];
 }

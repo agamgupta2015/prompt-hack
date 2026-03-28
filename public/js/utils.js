@@ -1,76 +1,91 @@
+/* ── UTILS ── */
+
 /**
- * Extracts raw JSON from a string that may contain markdown codeblocks or surrounding text.
- * @param {string} text - The raw text from the LLM.
- * @returns {Object} - Parsed JSON object.
- * @throws {Error} - If no valid JSON is found.
+ * Extracts raw JSON from a string that may contain markdown blocks.
+ * @param {string} text - Raw output string from Gemini
+ * @returns {Object} Parsed JSON dictionary
+ * @throws {Error} If valid JSON format is missing or corrupted
  */
 export function extractAndParseJSON(text) {
   if (!text || typeof text !== 'string') {
-    throw new Error('Invalid input: text required.');
+    throw new Error('Input validation: Required string missing.');
   }
 
-  // Try to find markdown json block
   const match = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
   try {
-    if (match && match[1]) {
-      return JSON.parse(match[1]);
-    }
-    // Fallback: try to parse the entire text if it's already clean JSON
+    if (match && match[1]) return JSON.parse(match[1]);
     return JSON.parse(text);
   } catch (error) {
-    throw new Error(`Failed to parse structured response: ${error.message}`);
+    throw new Error(`Parse failure format mismatch: ${error.message}`);
   }
 }
 
 /**
- * Validates the core schema returned by the LLM.
- * @param {Object} data - The parsed JSON object.
- * @returns {boolean}
+ * Validates the core schema required for rendering.
+ * @param {Object} data - Parsed JSON object
+ * @returns {boolean} True if all required fields are present
  */
-export function validateSchema(data) {
+export function validateIncidentJSON(data) {
   if (!data || typeof data !== 'object') return false;
 
-  const requiredFields = [
+  const required = [
     'severity',
     'incident_title',
     'incident_type',
     'confidence_score',
-    'action_queue',
   ];
 
-  return requiredFields.every((field) => field in data);
+  return required.every((field) => field in data);
 }
 
 /**
- * Creates an initial intelligence card skeleton to prevent null errors
- */
-export function createEmptyCard() {
-  return {
-    severity: 'LOW',
-    incident_title: 'Unidentified Incident',
-    incident_type: 'Unknown',
-    confidence_score: 0.0,
-    entities: {
-      people: [],
-      locations: [],
-      times: [],
-      resources_needed: [],
-      organisations: [],
-    },
-    verified_facts: [],
-    unverified_claims: [],
-    action_queue: [],
-    notify: [],
-    plain_english_summary: 'No data available.',
-    auto_tags: [],
-  };
-}
-
-/**
- * Generates a unique short ID based on timestamp and random string
+ * Generates a unique short ID for indexing incidents.
+ * @returns {string} Formatted string like INC-TIMESTAMP-HASH
  */
 export function generateIncidentId() {
   const timestamp = Date.now().toString(36).toUpperCase();
   const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
   return `INC-${timestamp}-${randomStr}`;
+}
+
+/**
+ * Strips HTML tags and trims whitespace from user input.
+ * @param {string} raw - Unsanitized string
+ * @returns {string} Clean string
+ */
+export function sanitizeInput(raw) {
+  if (!raw) return '';
+  return raw.replace(/<[^>]*>/g, '').trim();
+}
+
+/**
+ * Maps raw severity string to known constraints.
+ * @param {string} sev - Raw value
+ * @returns {string} Normalized severity
+ */
+export function parseSeverity(sev) {
+  const clean = String(sev).toUpperCase();
+  if (['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(clean)) return clean;
+  return 'UNKNOWN';
+}
+
+/**
+ * Formats timestamp integer cleanly.
+ * @param {number} ts - Epoch time
+ * @returns {string} HH:MM:SS format
+ */
+export function formatTimestamp(ts) {
+  return new Date(ts).toLocaleTimeString();
+}
+
+/**
+ * Computes color hex or variable string based on confidence score.
+ * @param {number} score - 0.0 to 1.0
+ * @returns {string} CSS color var
+ */
+export function calculateConfidenceColor(score) {
+  if (typeof score !== 'number' || score < 0 || score > 1.0) return 'var(--c-text-muted)';
+  if (score >= 0.8) return 'var(--c-accent-green)';
+  if (score >= 0.5) return 'var(--c-accent-amber)';
+  return 'var(--c-accent-red)';
 }

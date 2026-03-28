@@ -1,473 +1,467 @@
-/*
-  === PRODUCTION SECURITY PATTERN FOR GEMINI API KEY ===
-  In a production environment, never expose the Gemini API key in the client.
-  Instead:
-  1. Store the GEMINI_API_KEY in Google Cloud Secret Manager.
-  2. Create a Firebase Cloud Function (e.g., `processSignal`).
-  3. The Cloud Function accesses the secret at runtime.
-  4. The client app calls the Firebase Cloud Function, which proxies the request to the Gemini API.
-  5. The Cloud Function enforces Firebase App Check to ensure requests only come from your app.
-
-  === GA4 MEASUREMENT PLAN ===
-  Events tracked:
-  - signal_submitted (params: input_type, input_length) -> Fired when user clicks "Process Signal"
-  - incident_parsed (params: severity, incident_type, confidence_score) -> Fired when Gemini returns successfully
-  - action_exported -> Fired when user clicks "Export JSON"
-  - preset_loaded (params: preset_name) -> Fired when a preset is used
-*/
-
-import {
-  extractAndParseJSON,
-  validateSchema,
-  generateIncidentId,
-} from './utils.js';
-import { getApiKey, saveApiKey } from './storage.js';
-import { processSignalToGemini } from './api.js';
-import {
-  showToast,
-  renderOutputCard,
-  updateProcessingState,
-  clearProcessingLogs,
-  renderHistory,
-} from './ui.js';
+/* ── IMPORTS ── */
+import { extractAndParseJSON, validateSchema, generateIncidentId } from './utils.js';
+import { getConfig, saveApiKey, clearSession } from './storage.js';
+import { processSignalToGemini, processSignalToVisionAPI } from './api.js';
+import { showInlineBanner, renderOutputCard, updateProcessingState, clearProcessingLogs, renderHistory } from './ui.js';
 import { handleFileSelect } from './image.js';
-import {
-  initSpeechRecognition,
-  startRecording,
-  stopRecording,
-  isSpeechRecording,
-} from './audio.js';
+import { initSpeechRecognition, startRecording, stopRecording, isSpeechRecording } from './audio.js';
 
-/* Firebase Initialization */
-const firebaseConfig = {
-  apiKey: "YOUR_FIREBASE_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
-  measurementId: "G-XXXXXXXXXX"
+/* ── CONSTANTS & DOM ELEMENTS ── */
+const SCENARIOS = {
+  fire: 'theres fire at building near 5th and main, smoke everywhere, one guy is down near the door',
+  cyclone: '{"source":"NOAA","warning":"CYCLONE SEVERE","lat":-12.4,"lon":130.8}',
+  casualty: 'Medic 4 confirming MCI at central station. multiple blast injuries.',
+  bridge: "BRIDGE COLLAPSE I-95 SOUTH. Sensor node 42: structural integrity critical fail.",
+  flood: 'DAM RELEASE NOTICE: upstream dam 9. flow rate 4000cfs.',
+  gas: 'operator: 911 whats your emergency. caller: help i smell strong gas on elm st.',
 };
 
-// Initialize Firebase SDK
+const ELEMENTS = {
+  apiKeyInput: document.getElementById('apiKeyInput'),
+  saveKeyBtn: document.getElementById('saveKeyBtn'),
+  keyStatusContainer: document.getElementById('keyStatusContainer'),
+  textInput: document.getElementById('textInput'),
+  pasteInput: document.getElementById('pasteInput'),
+  voiceTranscript: document.getElementById('voiceTranscript'),
+  micBtn: document.getElementById('micBtn'),
+  waveform: document.getElementById('waveform'),
+  voiceStatus: document.getElementById('voiceStatus'),
+  dropZone: document.getElementById('dropZone'),
+  fileInput: document.getElementById('fileInput'),
+  imagePreview: document.getElementById('imagePreview'),
+  photoDescription: document.getElementById('photoDescription'),
+  processBtn: document.getElementById('processBtn'),
+  exportJsonBtn: document.getElementById('exportJsonBtn'),
+  copySummaryBtn: document.getElementById('copySummaryBtn'),
+  newSignalBtn: document.getElementById('newSignalBtn'),
+  historyToggleBtn: document.getElementById('historyToggleBtn'),
+  closeHistoryBtn: document.getElementById('closeHistoryBtn'),
+  historyDrawer: document.getElementById('historyDrawer'),
+  sessionIndicator: document.getElementById('sessionIndicator'),
+  tabs: document.querySelectorAll('.tab'),
+  tabPanels: document.querySelectorAll('.tab-panel'),
+  presets: document.querySelectorAll('.btn-preset')
+};
+
+let currentActiveTabId = 'tab-text';
+let currentImageData = null;
+let currentIncidentData = null;
+let voiceDebounceTimeout = null;
+
+/* ── FIRESTORE & AUTH ── */
+/* 
+  Modular import pattern via CDN (In an NPM project: import { initializeApp } from "firebase/app") 
+*/
+const firebaseConfig = { projectId: "YOUR_PROJECT_ID" }; // Add real keys
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
 
-/*
-  Firestore Security Rules required for this app:
-  rules_version = '2';
-  service cloud.firestore {
-    match /databases/{database}/documents {
-      match /incidents/{incidentId} {
-        allow read, write: if request.auth != null
-          && request.auth.uid == resource.data.uid;
-        allow create: if request.auth != null
-          && request.resource.data.uid == request.auth.uid;
-      }
-    }
-  }
-*/
-
-/* State */
-let currentActiveTabId = 'tab-text';
-let currentImageData = null;
-let currentIncidentData = null;
-
-/* Elements */
-const apiKeyInput = document.getElementById('apiKeyInput');
-const saveKeyBtn = document.getElementById('saveKeyBtn');
-const keyStatusContainer = document.getElementById('keyStatusContainer');
-
-const textInput = document.getElementById('textInput');
-const pasteInput = document.getElementById('pasteInput');
-const voiceTranscript = document.getElementById('voiceTranscript');
-const micBtn = document.getElementById('micBtn');
-const waveform = document.getElementById('waveform');
-const voiceStatus = document.getElementById('voiceStatus');
-
-const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
-const imagePreview = document.getElementById('imagePreview');
-const photoDescription = document.getElementById('photoDescription');
-
-const processBtn = document.getElementById('processBtn');
-
-/* Init */
-function init() {
-  const existingKey = getApiKey();
-  if (existingKey) {
-    apiKeyInput.value = '********'; // Masked visual
-    keyStatusContainer.textContent = 'Key Loaded ✓';
-    keyStatusContainer.style.color = 'var(--c-accent-green)';
-  }
-
-  // Firebase Auth & Real-time History Listener
+/**
+ * Initializes remote Firebase systems and anon auth payload.
+ */
+function initFirebaseSystems() {
   auth.onAuthStateChanged((user) => {
-    const sessionIndicator = document.getElementById('sessionIndicator');
-    if (user) {
-      if (sessionIndicator) {
-        sessionIndicator.classList.remove('offline');
-        sessionIndicator.classList.add('online');
-        sessionIndicator.title = 'Session Online';
-      }
-
-      // Setup Firestore Real-time listener for History
-      db.collection("incidents")
-        .where("uid", "==", user.uid)
-        .orderBy("created_at", "desc")
-        .limit(10)
-        .onSnapshot((snapshot) => {
-          const historyArray = [];
-          snapshot.forEach(doc => {
-            historyArray.push({
-              id: doc.id,
-              timestamp: doc.data().created_at ? doc.data().created_at.toMillis() : Date.now(),
-              data: doc.data()
-            });
-          });
-          renderHistory(historyArray);
-        }, (err) => {
-          console.error("Firestore history listener error:", err);
-        });
-    } else {
-      if (sessionIndicator) {
-        sessionIndicator.classList.remove('online');
-        sessionIndicator.classList.add('offline');
-        sessionIndicator.title = 'Session Offline';
-      }
-    }
+    if (user) handleAuthOnline(user);
+    else handleAuthOffline();
   });
-
-  // Anonymous login on app load
-  auth.signInAnonymously().catch(err => {
-    console.warn("Auth init failed. Maybe offline:", err);
-  });
+  auth.signInAnonymously().catch(() => handleAuthOffline());
 }
 
-/* API Key Management */
-saveKeyBtn.addEventListener('click', () => {
-  const val = apiKeyInput.value.trim();
-  if (val && val !== '********') {
-    saveApiKey(val);
-    keyStatusContainer.textContent = 'Key Saved ✓';
-    keyStatusContainer.style.color = 'var(--c-accent-green)';
-    setTimeout(() => {
-      apiKeyInput.value = '********';
-    }, 500);
+/**
+ * Sets dynamic connection state for UI dot and hooks Firestore Snapshot.
+ * @param {Object} user - Firebase User block
+ */
+function handleAuthOnline(user) {
+  if (ELEMENTS.sessionIndicator) {
+    ELEMENTS.sessionIndicator.className = 'session-dot online';
+    ELEMENTS.sessionIndicator.title = 'Session Online';
   }
-});
+  db.collection("incidents").where("uid", "==", user.uid)
+    .orderBy("created_at", "desc").limit(10)
+    .onSnapshot((snap) => renderSnapshotStream(snap), () => {
+      showInlineBanner('Offline Mode: Firebase history unlinked.', 'error');
+    });
+}
 
-/* Tabs */
-const tabs = document.querySelectorAll('.tab');
-tabs.forEach((tab) => {
-  tab.addEventListener('click', (e) => {
-    // Reset tabs
-    tabs.forEach((t) => t.classList.remove('active'));
-    document
-      .querySelectorAll('.tab-panel')
-      .forEach((p) => p.classList.add('hidden'));
+/**
+ * Translates Firestore snapshot stream into History payload list.
+ * @param {Object} snap - Collection snapshot frame
+ */
+function renderSnapshotStream(snap) {
+  const historyArray = [];
+  snap.forEach(doc => historyArray.push({
+    id: doc.id,
+    timestamp: doc.data().created_at?.toMillis() || Date.now(),
+    data: doc.data()
+  }));
+  renderHistory(historyArray);
+}
 
-    // Highlight active
-    e.target.classList.add('active');
-    currentActiveTabId = e.target.getAttribute('aria-controls');
-    document.getElementById(currentActiveTabId).classList.remove('hidden');
-  });
-});
-
-/* Presets */
-const SCENARIOS = {
-  fire: 'theres fire at the building near 5th and main, smoke everywhere, people on 3rd floor, electricity sparking, one guy is down near the door',
-  cyclone:
-    '{"source":"NOAA","warning":"CYCLONE SEVERE","lat":-12.4,"lon":130.8,"wind_kt":120,"surge_m":4,"status":"IMMINENT_LANDFALL","power_status":"50%_OFFLINE"}',
-  casualty:
-    'Medic 4 confirming MCI at central station. multiple blast injuries. need 5 bus immediately. police secure perimeter. blood shortage.',
-  bridge:
-    "BRIDGE COLLAPSE I-95 SOUTH. Sensor node 42: structural integrity critical fail. Twitter: 'omg the bridge just fell cars in water'.",
-  flood:
-    'DAM RELEASE NOTICE: upstream dam 9. flow rate 4000cfs. expected impact zone lower valley. data missing from sensor 2. Evacuate zone A.',
-  gas: 'operator: 911 whats your emergency. caller: help i smell strong gas in my apartment complex on elm st. my neighbors are passing out. operator: get out now.',
-};
-
-document.querySelectorAll('.btn-preset').forEach((btn) => {
-  btn.addEventListener('click', (e) => {
-    const key = e.target.getAttribute('data-preset');
-    const text = SCENARIOS[key];
-
-    // GA4 Tracking
-    if (typeof gtag !== 'undefined') {
-      gtag('event', 'preset_loaded', {
-        preset_name: key
-      });
-    }
-
-    // Switch to text tab if not on paste
-    if (key === 'cyclone') {
-      document.getElementById('btn-tab-paste').click();
-      pasteInput.value = text;
-    } else {
-      document.getElementById('btn-tab-text').click();
-      textInput.value = text;
-    }
-  });
-});
-
-/* Image Upload Logic */
-dropZone.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  dropZone.classList.add('drag-over');
-});
-
-dropZone.addEventListener('dragleave', () => {
-  dropZone.classList.remove('drag-over');
-});
-
-dropZone.addEventListener('drop', async (e) => {
-  e.preventDefault();
-  dropZone.classList.remove('drag-over');
-  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-    await processImageFile(e.dataTransfer.files[0]);
+/**
+ * Traps connection state fallbacks explicitly.
+ */
+function handleAuthOffline() {
+  if (ELEMENTS.sessionIndicator) {
+    ELEMENTS.sessionIndicator.className = 'session-dot offline';
+    ELEMENTS.sessionIndicator.title = 'Session Offline';
   }
-});
+}
 
-dropZone.addEventListener('click', () => {
-  fileInput.click();
-});
-
-fileInput.addEventListener('change', async (e) => {
-  if (e.target.files && e.target.files[0]) {
-    await processImageFile(e.target.files[0]);
-  }
-});
-
-async function processImageFile(file) {
+/**
+ * Flushes active incident to Firestore asynchronously.
+ * @param {Object} payload JSON AST
+ * @param {string} id Incident hash
+ */
+async function syncToFirestore(payload, id) {
+  if (!auth.currentUser) return;
   try {
-    const imgData = await handleFileSelect(file);
-    currentImageData = imgData;
-    imagePreview.src = imgData.url;
-    imagePreview.classList.remove('hidden');
-    dropZone.querySelector('.drop-text').classList.add('hidden');
+    await db.collection("incidents").doc(id).set({
+      ...payload,
+      uid: auth.currentUser.uid,
+      created_at: firebase.firestore.FieldValue.serverTimestamp(),
+      input_type: currentActiveTabId
+    });
   } catch (err) {
-    showToast(err.message, 'error');
+    showInlineBanner('Firestore write failed. Tracking locally.', 'error');
   }
 }
 
-/* Voice Logic */
-initSpeechRecognition(
-  (final, interim) => {
-    voiceTranscript.value = final + interim;
-  },
-  (err) => {
-    showToast(`Microphone Error: ${err}`);
-    voiceStatus.textContent = 'Mic Error';
-    waveform.classList.add('hidden');
-    micBtn.classList.remove('recording');
-  },
-  () => {
-    // End cleanly
-    micBtn.classList.remove('recording');
-    waveform.classList.add('hidden');
-    voiceStatus.textContent = 'Recording Stopped';
-  }
-);
+/* ── ANALYTICS ── */
 
-micBtn.addEventListener('click', () => {
-  if (isSpeechRecording()) {
-    stopRecording();
-    micBtn.classList.remove('recording');
-    waveform.classList.add('hidden');
-    voiceStatus.textContent = 'Processing transcript...';
-  } else {
-    const started = startRecording();
-    if (started) {
-      micBtn.classList.add('recording');
-      waveform.classList.remove('hidden');
-      voiceStatus.textContent = 'Listening live...';
-      voiceTranscript.value = ''; // clear on start
+/**
+ * Streams exact AST match to Google BigQuery.
+ * @param {Object} payload JSON AST
+ * @param {string} id Incident hash
+ * @param {number} timestamp Date tick
+ */
+async function syncToBigQuery(payload, id, timestamp) {
+  try {
+    const bqPath = `https://bigquery.googleapis.com/bigquery/v2/projects/${firebaseConfig.projectId}/datasets/aria_incidents/tables/parsed_signals/insertAll`;
+    const res = await fetch(bqPath, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildBigQueryRow(payload, id, timestamp))
+    });
+    if (res.ok) showInlineBanner('Incident logged to BigQuery', 'info');
+  } catch (err) { }
+}
+
+/**
+ * Reconstructs AST to match strict BigQuery array schema format.
+ * @param {Object} body AST payload
+ * @param {string} id Hash string
+ * @param {number} ts Milliseconds timestamp
+ * @returns {Object} JSON payload dictionary
+ */
+function buildBigQueryRow(body, id, ts) {
+  return { rows: [{
+    insertId: id,
+    json: {
+      incidentId: id, timestamp: new Date(ts).toISOString(),
+      uid: "anonymous", severity: body.severity,
+      incident_title: body.incident_title, incident_type: body.incident_type,
+      confidence_score: body.confidence_score,
+      entities: JSON.stringify(body.entities || {}),
+      plain_english_summary: body.plain_english_summary
     }
+  }]};
+}
+
+/**
+ * Publishes events to GA4 data layer strictly.
+ * @param {string} name Event name
+ * @param {Object} params GA4 tracking properties
+ */
+function trackEvent(name, params = {}) {
+  if (typeof gtag !== 'undefined') gtag('event', name, params);
+}
+
+/* ── ORCHESTRATION ── */
+
+/**
+ * Top level aggregator triggering UI freeze, fetching, validation, and syncing.
+ */
+async function triggerSignalProcessing() {
+  const cfg = getConfig();
+  if (!cfg.geminiApiKey) return showInlineBanner('API Key is strictly required in config.', 'error');
+
+  const payload = gatherInterfaceInputs();
+  if (!payload.text && !payload.image) return showInlineBanner('Valid unformatted input required.', 'error');
+
+  ELEMENTS.processBtn.disabled = true;
+  document.getElementById('outputPanel').classList.add('hidden');
+  trackEvent('signal_submitted', { input_type: currentActiveTabId });
+
+  try {
+    await orchestrateCloudFlow(payload, cfg.geminiApiKey);
+  } catch (err) {
+    clearProcessingLogs();
+    showInlineBanner(err.message, 'error');
+  } finally {
+    ELEMENTS.processBtn.disabled = false;
   }
-});
+}
 
-/* Main Process Flow */
-processBtn.addEventListener('click', async () => {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    showToast('API Key is required. Please save it in the header.');
-    return;
-  }
-
-  // Gather Input
-  const inputPayload = { text: '', image: null };
-
+/**
+ * Consolidates inputs safely sanitizing the raw contents explicitly.
+ * @returns {Object} Input payload mapped by mode
+ */
+function gatherInterfaceInputs() {
+  const out = { text: '', image: null };
   switch (currentActiveTabId) {
-    case 'tab-text':
-      inputPayload.text = textInput.value.trim();
-      break;
-    case 'tab-paste':
-      inputPayload.text = pasteInput.value.trim();
-      break;
+    case 'tab-text': out.text = ELEMENTS.textInput.value; break;
+    case 'tab-paste': out.text = ELEMENTS.pasteInput.value; break;
     case 'tab-voice':
-      inputPayload.text = voiceTranscript.value.trim();
-      if (isSpeechRecording()) stopRecording();
+      out.text = ELEMENTS.voiceTranscript.value;
+      if (isSpeechRecording()) forceStopRecording();
       break;
     case 'tab-photo':
-      inputPayload.text =
-        photoDescription.value.trim() ||
-        'Describe this scene and extract relevant intelligence.';
-      inputPayload.image = currentImageData;
+      out.text = ELEMENTS.photoDescription.value || 'Describe this scene';
+      out.image = currentImageData;
       break;
   }
+  // Sanitize input to strip all HTML tags natively per security matrix
+  if (out.text) out.text = out.text.replace(/<[^>]*>/g, '').trim();
+  return out;
+}
 
-  if (!inputPayload.text && !inputPayload.image) {
-    showToast('Please provide input signal before processing.');
-    return;
+/**
+ * Chains pre-processing Vision calls with core Gemini restructuring endpoints.
+ * @param {Object} input Clean mapped payload
+ * @param {string} apiKey Auth session key
+ */
+async function orchestrateCloudFlow(input, apiKey) {
+  updateProcessingState('Establishing LLM connection link...');
+  
+  if (currentActiveTabId === 'tab-photo' && input.image) {
+    updateProcessingState('Vision pre-processing sequence...');
+    input = await interceptVisionPayload(input, apiKey);
   }
 
-  // GA4 Tracking
-  if (typeof gtag !== 'undefined') {
-    gtag('event', 'signal_submitted', {
-      input_type: currentActiveTabId,
-      input_length: inputPayload.text ? inputPayload.text.length : 0
-    });
-  }
+  updateProcessingState('Awaiting Gemini parsing parameters...');
+  const rawResponse = await processSignalToGemini(input, apiKey);
+  const ast = validateASTResponse(rawResponse);
+  
+  trackEvent('incident_parsed', { severity: ast.severity, incident_type: ast.incident_type });
+  finalizeOutputUI(ast);
+}
 
-  // Disabling interactions
-  processBtn.disabled = true;
-  document.getElementById('outputPanel').classList.add('hidden');
-
+/**
+ * Connects Vision REST wrapper and appends metadata text block securely.
+ * @param {Object} basePayload Raw text and ML b64 string
+ * @param {string} key Active API hash
+ * @returns {Promise<Object>} Formatted string mapped payload explicitly enriched
+ */
+async function interceptVisionPayload(basePayload, key) {
   try {
-    // 1. Show processing
-    const processingSteps = [
-      'Establishing connection to Gemini bridge...',
-      'Analyzing unformatted multi-modal signatures...',
-      'Triangulating verifiable entities...',
-      'Prioritizing intelligence queue...',
-    ];
-
-    updateProcessingState(processingSteps[0]);
-
-    // Simulate UI sync progression logic since API is fast but we want dramatic effect
-    for (let i = 1; i < processingSteps.length; i++) {
-      setTimeout(() => updateProcessingState(processingSteps[i]), i * 800);
-    }
-
-    // 2. Fetch
-    const rawResponse = await processSignalToGemini(inputPayload, apiKey);
-
-    updateProcessingState('Signal parsed. Reconstructing schema...');
-
-    // 3. Parse and Validate
-    const parsedJSON = extractAndParseJSON(rawResponse);
-    if (!validateSchema(parsedJSON)) {
-      throw new Error('Gemini payload violated schema structure.');
-    }
-
-    // 4. Update UI & Save State
-    clearProcessingLogs();
-
-    const incidentId = generateIncidentId();
-    const timestamp = Date.now();
-
-    currentIncidentData = parsedJSON; // Cache for export
-
-    renderOutputCard(parsedJSON, incidentId, timestamp);
-
-    // 5. Commit to Firestore
-    if (auth.currentUser) {
-      try {
-        await db.collection("incidents").doc(incidentId).set({
-          ...parsedJSON,
-          uid: auth.currentUser.uid,
-          created_at: firebase.firestore.FieldValue.serverTimestamp(),
-          input_type: currentActiveTabId,
-          raw_input_length: inputPayload.text ? inputPayload.text.length : 0
-        });
-      } catch (err) {
-        showToast('Firestore offline — incident saved locally', 'error');
-        console.error("Firestore write failed", err);
-      }
-    }
-
-    // GA4 Tracking
-    if (typeof gtag !== 'undefined') {
-      gtag('event', 'incident_parsed', {
-        severity: parsedJSON.severity,
-        incident_type: parsedJSON.incident_type,
-        confidence_score: parsedJSON.confidence_score
-      });
-    }
-
-    showToast('Signal processed successfully.', 'info');
-  } catch (error) {
-    clearProcessingLogs();
-    showToast(error.message, 'error');
-  } finally {
-    processBtn.disabled = false;
+    const block = await processSignalToVisionAPI(basePayload.image.data, key);
+    let str = '--- VISION API DETECTIONS ---\n';
+    if (block.labelAnnotations) str += `Labels: ${block.labelAnnotations.map(l => l.description).join(',')}\n`;
+    if (block.textAnnotations?.length) str += `Text: ${block.textAnnotations[0].description}\n`;
+    str += '-----------------------------\n';
+    basePayload.text = str + basePayload.text;
+  } catch (err) {
+    showInlineBanner('Vision API failure avoided, skipping context enrichment', 'info');
   }
-});
+  return basePayload;
+}
 
-/* Actions (Export, Copy) */
-document.getElementById('exportJsonBtn').addEventListener('click', () => {
-  if (!currentIncidentData) return;
+/**
+ * Validates AST strictly throwing explicit boundary errors.
+ * @param {string} raw Raw markdown text explicitly returned from Gemini
+ * @returns {Object} Verified matching dictionary
+ * @throws {Error} Strict JSON structural mismatch
+ */
+function validateASTResponse(raw) {
+  const parsed = extractAndParseJSON(raw);
+  if (!validateSchema(parsed)) throw new Error('Schema Violation: Return output was malformed.');
+  return parsed;
+}
 
-  // GA4 Tracking
-  if (typeof gtag !== 'undefined') {
-    gtag('event', 'action_exported');
-  }
+/**
+ * Updates DOM logic state successfully reporting completion.
+ * @param {Object} ast Verified data mapping
+ */
+function finalizeOutputUI(ast) {
+  currentIncidentData = ast;
+  const id = generateIncidentId();
+  const ts = Date.now();
+  renderOutputCard(ast, id, ts);
+  syncToFirestore(ast, id);
+  syncToBigQuery(ast, id, ts);
+}
 
-  const str = JSON.stringify(currentIncidentData, null, 2);
-  const blob = new Blob([str], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `aria-${new Date().getTime()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
+/* ── DOM & EVENTS ── */
 
-document
-  .getElementById('copySummaryBtn')
-  .addEventListener('click', async () => {
-    if (!currentIncidentData) return;
-    try {
-      await navigator.clipboard.writeText(
-        currentIncidentData.plain_english_summary
-      );
-      showToast('Summary copied to clipboard', 'info');
-    } catch (err) {
-      showToast('Failed to copy clipboard');
+/**
+ * Master bind event routing logic hooking explicitly requested interactive logic.
+ */
+function initEventListeners() {
+  document.addEventListener('DOMContentLoaded', () => {
+    initFirebaseSystems();
+    initSpeechRouting();
+    bindHeaderEvents();
+    bindTabs();
+    bindPresets();
+    bindDropHooks();
+    bindActionAreaEvents();
+  });
+  
+  // Security protocol requirement
+  window.addEventListener('beforeunload', () => clearSession());
+}
+
+/**
+ * Binds config bar toggles safely mapping.
+ */
+function bindHeaderEvents() {
+  if (getConfig().geminiApiKey) ELEMENTS.keyStatusContainer.textContent = 'Key Local ✓';
+  
+  ELEMENTS.saveKeyBtn.addEventListener('click', () => {
+    if (saveApiKey(ELEMENTS.apiKeyInput.value.trim())) {
+      ELEMENTS.keyStatusContainer.textContent = 'Key Saved ✓';
+      ELEMENTS.apiKeyInput.value = '********';
     }
   });
 
-document.getElementById('newSignalBtn').addEventListener('click', () => {
-  document.getElementById('outputPanel').classList.add('hidden');
-  textInput.value = '';
-  pasteInput.value = '';
-  voiceTranscript.value = '';
-  photoDescription.value = '';
-  imagePreview.src = '';
-  imagePreview.classList.add('hidden');
-  dropZone.querySelector('.drop-text').classList.remove('hidden');
-  currentImageData = null;
-  currentIncidentData = null;
-});
+  ELEMENTS.historyToggleBtn.addEventListener('click', () => {
+    ELEMENTS.historyDrawer.classList.toggle('open');
+  });
+  ELEMENTS.closeHistoryBtn.addEventListener('click', () => {
+    ELEMENTS.historyDrawer.classList.remove('open');
+  });
+}
 
-/* History Drawer Interactions */
-const historyToggleBtn = document.getElementById('historyToggleBtn');
-const closeHistoryBtn = document.getElementById('closeHistoryBtn');
-const historyDrawer = document.getElementById('historyDrawer');
+/**
+ * Swaps UI container elements specifically mapping semantic relationships.
+ */
+function bindTabs() {
+  ELEMENTS.tabs.forEach((tab) => {
+    tab.addEventListener('click', (e) => {
+      ELEMENTS.tabs.forEach(t => t.classList.remove('active'));
+      ELEMENTS.tabPanels.forEach(p => p.classList.add('hidden'));
+      e.target.classList.add('active');
+      currentActiveTabId = e.target.getAttribute('aria-controls');
+      document.getElementById(currentActiveTabId).classList.remove('hidden');
+    });
+  });
+}
 
-historyToggleBtn.addEventListener('click', () => {
-  const isExpanded = historyToggleBtn.getAttribute('aria-expanded') === 'true';
-  historyDrawer.classList.toggle('open');
-  historyToggleBtn.setAttribute('aria-expanded', !isExpanded);
-  historyDrawer.setAttribute('aria-hidden', isExpanded);
-});
+/**
+ * Attaches payload injectors safely avoiding AST execution faults.
+ */
+function bindPresets() {
+  ELEMENTS.presets.forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const mode = e.target.getAttribute('data-preset');
+      const text = SCENARIOS[mode];
+      trackEvent('preset_loaded', { preset_name: mode });
+      if (mode === 'cyclone') {
+        document.getElementById('btn-tab-paste').click();
+        ELEMENTS.pasteInput.value = text;
+      } else {
+        document.getElementById('btn-tab-text').click();
+        ELEMENTS.textInput.value = text;
+      }
+    });
+  });
+}
 
-closeHistoryBtn.addEventListener('click', () => {
-  historyDrawer.classList.remove('open');
-  historyToggleBtn.setAttribute('aria-expanded', 'false');
-  historyDrawer.setAttribute('aria-hidden', 'true');
-});
+/**
+ * Attaches asynchronous drag rules for dropping ML payloads safely.
+ */
+function bindDropHooks() {
+  ELEMENTS.dropZone.addEventListener('dragover', e => { e.preventDefault(); ELEMENTS.dropZone.classList.add('drag-over'); });
+  ELEMENTS.dropZone.addEventListener('dragleave', () => { ELEMENTS.dropZone.classList.remove('drag-over'); });
+  ELEMENTS.dropZone.addEventListener('drop', async e => {
+    e.preventDefault();
+    ELEMENTS.dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files?.[0]) await triggerImageIngestion(e.dataTransfer.files[0]);
+  });
+  ELEMENTS.dropZone.addEventListener('click', () => ELEMENTS.fileInput.click());
+  ELEMENTS.fileInput.addEventListener('change', async e => {
+    if (e.target.files?.[0]) await triggerImageIngestion(e.target.files[0]);
+  });
+}
 
-init();
+/**
+ * Parses files visually tracking local variables dynamically rendering states.
+ * @param {File} file Target blob memory location
+ */
+async function triggerImageIngestion(file) {
+  try {
+    currentImageData = await handleFileSelect(file);
+    ELEMENTS.imagePreview.src = currentImageData.url;
+    ELEMENTS.imagePreview.classList.remove('hidden');
+    ELEMENTS.dropZone.querySelector('.drop-text').classList.add('hidden');
+  } catch (err) {
+    showInlineBanner(err.message, 'error');
+  }
+}
+
+/**
+ * Connects Web API specifically bounding microphone state maps natively.
+ */
+function initSpeechRouting() {
+  initSpeechRecognition(
+    (f, i) => {
+      clearTimeout(voiceDebounceTimeout);
+      voiceDebounceTimeout = setTimeout(() => { ELEMENTS.voiceTranscript.value = f + i; }, 300);
+    },
+    (err) => { showInlineBanner(`Mic blocked: ${err}`, 'error'); forceStopRecording(); },
+    () => { forceStopRecording(); }
+  );
+  ELEMENTS.micBtn.addEventListener('click', () => {
+    if (isSpeechRecording()) forceStopRecording();
+    else forceStartRecording();
+  });
+}
+
+/**
+ * Starts audio interface binding safely tracking interface flags.
+ */
+function forceStartRecording() {
+  if (startRecording()) {
+    ELEMENTS.micBtn.classList.add('recording');
+    ELEMENTS.waveform.classList.remove('hidden');
+    ELEMENTS.voiceStatus.textContent = 'Listening live...';
+    ELEMENTS.voiceTranscript.value = '';
+  }
+}
+
+/**
+ * Shuts down asynchronous loop interfaces mapping correctly terminating.
+ */
+function forceStopRecording() {
+  stopRecording();
+  ELEMENTS.micBtn.classList.remove('recording');
+  ELEMENTS.waveform.classList.add('hidden');
+  ELEMENTS.voiceStatus.textContent = 'Recording Stopped';
+}
+
+/**
+ * Dispatches core processor hook specifically hooking AST translation routes.
+ */
+function bindActionAreaEvents() {
+  ELEMENTS.processBtn.addEventListener('click', triggerSignalProcessing);
+  
+  ELEMENTS.exportJsonBtn.addEventListener('click', () => {
+    if (!currentIncidentData) return;
+    trackEvent('action_exported');
+    const b = new Blob([JSON.stringify(currentIncidentData, null, 2)], { type: 'application/json' });
+    const u = URL.createObjectURL(b);
+    const a = document.createElement('a');
+    a.href = u; a.download = `aria-${Date.now()}.json`; a.click();
+    URL.revokeObjectURL(u);
+  });
+
+  ELEMENTS.copySummaryBtn.addEventListener('click', async () => {
+    if (!currentIncidentData) return;
+    try { await navigator.clipboard.writeText(currentIncidentData.plain_english_summary); showInlineBanner('Summary copied.', 'info'); } 
+    catch { showInlineBanner('Clipboard access denied.', 'error'); }
+  });
+
+  ELEMENTS.newSignalBtn.addEventListener('click', () => location.reload()); // Quick clear
+}
+
+initEventListeners();

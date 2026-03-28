@@ -1,76 +1,85 @@
-/**
- * Web Speech API handler
- */
+/* ── AUDIO ── */
 
 let recognition = null;
 let isRecording = false;
 
+/**
+ * Instantiates the Web Speech API recognition interface.
+ * @param {Function} onResult - Callback firing transcribed text
+ * @param {Function} onError - Callback firing error strings
+ * @param {Function} onEnd - Callback handling termination state
+ * @returns {boolean} Support state
+ */
 export function initSpeechRecognition(onResult, onError, onEnd) {
-  const SpeechRecognition =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
+  const SpeechR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechR) return false;
 
-  if (!SpeechRecognition) {
-    console.error('Speech Recognition API not supported in this browser.');
-    return false;
-  }
-
-  recognition = new SpeechRecognition();
+  recognition = new SpeechR();
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
-  recognition.onresult = (event) => {
-    let finalTranscript = '';
-    let interimTranscript = '';
-
-    for (let i = event.resultIndex; i < event.results.length; ++i) {
-      if (event.results[i].isFinal) {
-        finalTranscript += event.results[i][0].transcript;
-      } else {
-        interimTranscript += event.results[i][0].transcript;
-      }
-    }
-
-    if (onResult) {
-      onResult(finalTranscript, interimTranscript);
-    }
-  };
-
-  recognition.onerror = (event) => {
-    console.error('Speech recognition error', event.error);
-    isRecording = false;
-    if (onError) onError(event.error);
-  };
-
-  recognition.onend = () => {
-    if (isRecording) {
-      // Auto restart if still recording
-      try {
-        recognition.start();
-      } catch {
-        isRecording = false;
-        if (onEnd) onEnd();
-      }
-    } else {
-      if (onEnd) onEnd();
-    }
-  };
+  recognition.onresult = (e) => handleSpeechEvent(e, onResult);
+  recognition.onerror = (e) => handleErrorEvent(e, onError);
+  recognition.onend = () => handleEndEvent(onEnd);
 
   return true;
 }
 
+/**
+ * Extracts transcribed frames from Speech API.
+ * @param {Event} event - Speech event
+ * @param {Function} callback - Invocation target
+ */
+function handleSpeechEvent(event, callback) {
+  let finalTxt = '', interimTxt = '';
+  for (let i = event.resultIndex; i < event.results.length; ++i) {
+    if (event.results[i].isFinal) finalTxt += event.results[i][0].transcript;
+    else interimTxt += event.results[i][0].transcript;
+  }
+  if (callback) callback(finalTxt, interimTxt);
+}
+
+/**
+ * Routes error payload.
+ * @param {Event} event - Error event
+ * @param {Function} fallback - Fallback routing
+ */
+function handleErrorEvent(event, fallback) {
+  isRecording = false;
+  if (fallback) fallback(event.error);
+}
+
+/**
+ * Handles automatic restarts matching continuous loop expectations.
+ * @param {Function} onEnd - Lifecycle boundary
+ */
+function handleEndEvent(onEnd) {
+  if (isRecording) {
+    try { recognition.start(); } 
+    catch { isRecording = false; if (onEnd) onEnd(); }
+  } else if (onEnd) {
+    onEnd();
+  }
+}
+
+/**
+ * Engages the microphone listener.
+ * @returns {boolean} True if successfully triggered
+ */
 export function startRecording() {
   if (!recognition) return false;
   try {
     recognition.start();
     isRecording = true;
     return true;
-  } catch (e) {
-    console.warn('Recognition already started');
-    return false;
-  }
+  } catch { return false; }
 }
 
+/**
+ * Decouples the microphone listener.
+ * @returns {boolean} True if successfully dropped
+ */
 export function stopRecording() {
   if (!recognition) return false;
   isRecording = false;
@@ -78,6 +87,10 @@ export function stopRecording() {
   return true;
 }
 
+/**
+ * Reports live status query.
+ * @returns {boolean} Active state
+ */
 export function isSpeechRecording() {
   return isRecording;
 }
