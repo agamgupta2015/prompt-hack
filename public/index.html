@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ARIA — Universal Bridge</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="css/main.css" />
+    <link rel="stylesheet" href="css/animations.css" />
+    <link rel="stylesheet" href="css/components.css" />
+  </head>
+  <body>
+    <div class="background-overlay"></div>
+
+    <header>
+      <div class="brand">
+        <h1>ARIA</h1>
+        <span class="subtitle">UNIVERSAL BRIDGE</span>
+      </div>
+      <div class="config-bar">
+        <label for="apiKeyInput" class="visually-hidden">Gemini API Key</label>
+        <input
+          type="password"
+          id="apiKeyInput"
+          placeholder="Enter Gemini API Key (Session Store)"
+          aria-label="Gemini API Key"
+        />
+        <button
+          id="saveKeyBtn"
+          class="btn btn-outline"
+          aria-label="Save API Key"
+        >
+          Save Key
+        </button>
+        <span id="keyStatusContainer" aria-live="polite"></span>
+        <button
+          id="historyToggleBtn"
+          class="btn btn-outline"
+          aria-controls="historyDrawer"
+          aria-expanded="false"
+        >
+          History
+        </button>
+      </div>
+    </header>
+
+    <!-- History Drawer -->
+    <aside
+      id="historyDrawer"
+      class="drawer hidden"
+      aria-hidden="true"
+      aria-label="Recent Incidents"
+    >
+      <div class="drawer-header">
+        <h2>Recent Incident Cards</h2>
+        <button
+          id="closeHistoryBtn"
+          class="btn btn-icon"
+          aria-label="Close History"
+        >
+          ✕
+        </button>
+      </div>
+      <ul id="historyList" class="history-list">
+        <!-- Injected by JS -->
+      </ul>
+    </aside>
+
+    <main class="container">
+      <div class="split-layout">
+        <!-- LEFT: INTAKE PANEL -->
+        <section class="intake-panel" aria-label="Input Area">
+          <!-- Tabs -->
+          <nav class="tabs" role="tablist" aria-label="Intake Modes">
+            <button
+              role="tab"
+              aria-selected="true"
+              aria-controls="tab-text"
+              id="btn-tab-text"
+              class="tab active"
+            >
+              Text
+            </button>
+            <button
+              role="tab"
+              aria-selected="false"
+              aria-controls="tab-voice"
+              id="btn-tab-voice"
+              class="tab"
+            >
+              Voice
+            </button>
+            <button
+              role="tab"
+              aria-selected="false"
+              aria-controls="tab-photo"
+              id="btn-tab-photo"
+              class="tab"
+            >
+              Photo
+            </button>
+            <button
+              role="tab"
+              aria-selected="false"
+              aria-controls="tab-paste"
+              id="btn-tab-paste"
+              class="tab"
+            >
+              Paste
+            </button>
+          </nav>
+
+          <!-- Tab contents -->
+          <div class="tab-content-container">
+            <!-- Text Mode -->
+            <div
+              id="tab-text"
+              role="tabpanel"
+              aria-labelledby="btn-tab-text"
+              class="tab-panel active"
+            >
+              <label for="textInput" class="visually-hidden">Text Input</label>
+              <textarea
+                id="textInput"
+                class="ops-textarea"
+                placeholder="Type or paste unstructured situational data here..."
+                aria-label="Free form text input"
+              ></textarea>
+            </div>
+
+            <!-- Voice Mode -->
+            <div
+              id="tab-voice"
+              role="tabpanel"
+              aria-labelledby="btn-tab-voice"
+              class="tab-panel hidden"
+            >
+              <div class="voice-container">
+                <button
+                  id="micBtn"
+                  class="btn btn-mic"
+                  aria-label="Start Voice Recording"
+                >
+                  <span class="mic-icon">🎤</span>
+                </button>
+                <div id="voiceStatus" class="voice-status" aria-live="polite">
+                  Ready to record
+                </div>
+                <div class="waveform hidden" id="waveform">
+                  <span></span><span></span><span></span><span></span
+                  ><span></span>
+                </div>
+                <label for="voiceTranscript" class="visually-hidden"
+                  >Voice Transcript</label
+                >
+                <textarea
+                  id="voiceTranscript"
+                  class="ops-textarea"
+                  readonly
+                  placeholder="Transcript will appear here..."
+                ></textarea>
+              </div>
+            </div>
+
+            <!-- Photo Mode -->
+            <div
+              id="tab-photo"
+              role="tabpanel"
+              aria-labelledby="btn-tab-photo"
+              class="tab-panel hidden"
+            >
+              <div
+                id="dropZone"
+                class="drop-zone"
+                tabindex="0"
+                aria-label="Drop Image Here or Click to Select"
+              >
+                <span class="drop-text"
+                  >Drag & Drop Image or Click to Upload</span
+                >
+                <label for="fileInput" class="visually-hidden"
+                  >Select image file</label
+                >
+                <input
+                  type="file"
+                  id="fileInput"
+                  accept="image/*"
+                  class="visually-hidden"
+                  tabindex="-1"
+                />
+                <img
+                  id="imagePreview"
+                  class="image-preview hidden"
+                  alt="Uploaded photo preview"
+                />
+              </div>
+              <label for="photoDescription" class="visually-hidden"
+                >Optional photo description</label
+              >
+              <textarea
+                id="photoDescription"
+                class="ops-textarea small"
+                placeholder="Optional context or description of the photo..."
+              ></textarea>
+            </div>
+
+            <!-- Paste Mode -->
+            <div
+              id="tab-paste"
+              role="tabpanel"
+              aria-labelledby="btn-tab-paste"
+              class="tab-panel hidden"
+            >
+              <label for="pasteInput" class="visually-hidden"
+                >Raw Data Paste Input</label
+              >
+              <textarea
+                id="pasteInput"
+                class="ops-textarea code-font"
+                placeholder="Paste raw JSON, sensor data, logs..."
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- Presets -->
+          <div class="presets-container" aria-label="Preset Scenarios">
+            <span class="presets-label">PRESETS:</span>
+            <button class="btn btn-preset" data-preset="fire">
+              Building Fire
+            </button>
+            <button class="btn btn-preset" data-preset="cyclone">
+              Cyclone Warning
+            </button>
+            <button class="btn btn-preset" data-preset="casualty">
+              Mass Casualty
+            </button>
+            <button class="btn btn-preset" data-preset="bridge">
+              Bridge Failure
+            </button>
+            <button class="btn btn-preset" data-preset="flood">
+              Flash Flood
+            </button>
+            <button class="btn btn-preset" data-preset="gas">Gas Leak</button>
+          </div>
+
+          <button
+            id="processBtn"
+            class="btn btn-process"
+            aria-label="Process Signal"
+          >
+            PROCESS SIGNAL
+          </button>
+
+          <!-- Processing State -->
+          <div
+            id="processingState"
+            class="processing-state hidden"
+            aria-live="polite"
+          >
+            <div class="spinner-container">
+              <div class="ring r1"></div>
+              <div class="ring r2"></div>
+              <div class="ring r3"></div>
+            </div>
+            <div id="processingLogs" class="processing-logs">
+              <!-- Logs injected dynamically -->
+            </div>
+          </div>
+        </section>
+
+        <!-- RIGHT: OUTPUT PANEL -->
+        <section
+          id="outputPanel"
+          class="output-panel hidden"
+          aria-live="polite"
+          aria-label="Intelligence Card Output"
+        >
+          <div class="card-header slide-up-1">
+            <div id="severityBadge" class="badge-severity"><span></span></div>
+            <div class="incident-meta">
+              <h2 id="incidentTitle"></h2>
+              <span id="incidentType" class="tag type"></span>
+              <span id="incidentId" class="code-text"></span>
+              <span id="timestamp" class="code-text"></span>
+            </div>
+          </div>
+
+          <div class="card-summary slide-up-2">
+            <h3>Summary</h3>
+            <p id="plainSummary"></p>
+          </div>
+
+          <div class="card-columns slide-up-3">
+            <div class="entities-grid">
+              <h3>Entities</h3>
+              <div id="entitiesList" class="tags-container"></div>
+            </div>
+
+            <div class="claims-grid">
+              <h3>Intelligence Validation</h3>
+              <h4>Verified Facts</h4>
+              <ul id="verifiedFacts" class="fact-list"></ul>
+              <h4>Unverified Claims</h4>
+              <ul id="unverifiedClaims" class="fact-list claims"></ul>
+            </div>
+          </div>
+
+          <div class="card-actions slide-up-4">
+            <h3>Action Queue</h3>
+            <ol id="actionQueue" class="action-list"></ol>
+          </div>
+
+          <div class="card-notify slide-up-5">
+            <h3>Notification Roster</h3>
+            <ul id="notifyList" class="notify-list"></ul>
+          </div>
+
+          <div class="card-footer slide-up-6">
+            <div class="auto-tags" id="autoTags"></div>
+            <div class="footer-actions">
+              <button
+                id="exportJsonBtn"
+                class="btn btn-outline"
+                aria-label="Export JSON"
+              >
+                Export JSON
+              </button>
+              <button
+                id="copySummaryBtn"
+                class="btn btn-outline"
+                aria-label="Copy Summary"
+              >
+                Copy Summary
+              </button>
+              <button
+                id="newSignalBtn"
+                class="btn btn-outline"
+                aria-label="Process New Signal"
+              >
+                New Signal
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden" aria-live="assertive"></div>
+
+    <!-- Scripts -->
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
