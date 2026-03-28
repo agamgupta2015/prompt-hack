@@ -58,8 +58,16 @@ Every function handles one explicit logical boundary: State, Networking, Formatt
 - Visually hidden utilities are positioned properly for screen readers to absorb, avoiding CSS display none boundaries.
 - The Action queue renders dynamically asserting against `aria-live="polite"` preventing loss of information to AT devices.
 
-### Google Service Direct Integrations
-Uses REST fetching directly against `generativelanguage.googleapis.com` leveraging `gemini-2.0-flash`. 
+### Google Service Integrations
+
+This project deeply integrates a suite of Google Cloud and Firebase services:
+
+1. **Gemini API (`gemini-2.0-flash`)**: The core intelligence parsing engine, translating unstructured raw signals into deterministic JSON via direct REST queries.
+2. **Firebase Firestore & Auth**: Silent anonymous authentication guarantees session data integrity. Every incident processed is persistently saved to Firestore under precise security rules and live-syncs to the History drawer via `onSnapshot` listeners.
+3. **Google Maps Embed API**: Actively parses output entities. If `data.entities.locations` are identified, it dynamically renders an interactive embedded Map pinpointing the crisis location.
+4. **Google Analytics 4 (GA4)**: Granular event tracking (`gtag.js`) monitors critical operational interactions, capturing parameters for `signal_submitted`, `incident_parsed`, `action_exported`, and `preset_loaded`.
+5. **Google Cloud Secret Manager**: Production architectural patterns are fully documented within the codebase, detailing how to securely obscure API credentials off the public client using Firebase Cloud Functions and App Check.
+6. **Firebase Hosting**: Prepared statically with semantic caching rules, rewrites (`firebase.json`), and HSTS properties. Designed for single-command `firebase deploy --only hosting` orchestration.
 
 ## Testing
 
