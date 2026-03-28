@@ -58,16 +58,29 @@ Every function handles one explicit logical boundary: State, Networking, Formatt
 - Visually hidden utilities are positioned properly for screen readers to absorb, avoiding CSS display none boundaries.
 - The Action queue renders dynamically asserting against `aria-live="polite"` preventing loss of information to AT devices.
 
-### Google Service Integrations
+### Google Cloud & Firebase Integrations
 
-This project deeply integrates a suite of Google Cloud and Firebase services:
+This project deeply integrates a comprehensive suite of Google Cloud architectures:
 
-1. **Gemini API (`gemini-2.0-flash`)**: The core intelligence parsing engine, translating unstructured raw signals into deterministic JSON via direct REST queries.
-2. **Firebase Firestore & Auth**: Silent anonymous authentication guarantees session data integrity. Every incident processed is persistently saved to Firestore under precise security rules and live-syncs to the History drawer via `onSnapshot` listeners.
-3. **Google Maps Embed API**: Actively parses output entities. If `data.entities.locations` are identified, it dynamically renders an interactive embedded Map pinpointing the crisis location.
-4. **Google Analytics 4 (GA4)**: Granular event tracking (`gtag.js`) monitors critical operational interactions, capturing parameters for `signal_submitted`, `incident_parsed`, `action_exported`, and `preset_loaded`.
-5. **Google Cloud Secret Manager**: Production architectural patterns are fully documented within the codebase, detailing how to securely obscure API credentials off the public client using Firebase Cloud Functions and App Check.
-6. **Firebase Hosting**: Prepared statically with semantic caching rules, rewrites (`firebase.json`), and HSTS properties. Designed for single-command `firebase deploy --only hosting` orchestration.
+1. **Google Cloud Functions & Secret Manager**: The system is rigged to proxy Gemini API requests through a server-side `processSignal` function (documented in `index.html`). This abstracts API keys off the client entirely using Secret Manager and strictly enforces CORS.
+2. **Google Cloud Vision API**: For photo inputs, images are intercepted and pre-processed by the Vision API (`LABEL_DETECTION`, `TEXT_DETECTION`, `OBJECT_LOCALIZATION`). Discovered operational truths are securely prepended to the user's manual description before being sent to Gemini, maximizing ground-truth context.
+3. **Google Cloud BigQuery**: Live analytical streaming is active. Upon every successful intelligence parse, ARIA pushes an authenticated REST `POST` to BigQuery (`aria_incidents.parsed_signals`), mapping the exact nested JSON schema for enterprise data warehousing.
+4. **Gemini API (`gemini-2.0-flash`)**: The core cognitive parsing engine, translating the combined unstructured multi-modal context into deterministic, actionable JSON arrays.
+5. **Firebase Firestore & Auth**: Silent anonymous authentication guarantees session flow. Processed incidents are persistently saved to a secured Firestore instance and live-sync to the client's History drawer via synchronous `onSnapshot` listeners.
+6. **Google Maps Embed API**: Actively parses geographical output entities. If `data.entities.locations` are identified, it dynamically renders an interactive iframe Map pinpointing the crisis directly in the intelligence card.
+7. **Google Analytics 4 (GA4)**: Granular event tracking (`gtag.js`) monitors critical operational events: `signal_submitted`, `incident_parsed`, `action_exported`, and `preset_loaded`.
+8. **Firebase Hosting**: Prepared statically with semantic caching rules and rewrites natively configured via `firebase.json`.
+
+## Deployment & Troubleshooting
+
+If you are deploying this application manually and encounter a `zsh: command not found: firebase` error, you must install the Firebase CLI dependencies locally first:
+\`\`\`bash
+npm install -g firebase-tools
+firebase login
+firebase deploy --only hosting
+\`\`\`
+
+If you encounter a \`403 Permission Denied\` error when pushing via Git to trigger Developer Connect or Cloud Build pipelines, double-check that your active terminal session possesses correct write/push authentication tokens for the remote origin.
 
 ## Testing
 
